@@ -1,8 +1,8 @@
 <img width="388" height="575" alt="image" src="https://github.com/user-attachments/assets/f785348e-1f60-4024-9ea2-dd90ed74f6c4" /># ClaudeUsage
 
-A Claude-themed macOS menu-bar app that shows your **real Claude Max plan usage** —
-the live 5-hour window and weekly limits (from the same endpoint Claude Code's
-`/usage` uses) — with burn-rate "time-to-limit", a live 5-hour usage graph,
+A Claude-themed macOS menu-bar app that shows your **real Claude usage** — works on
+**Free, Pro, Team, or Max** — the live 5-hour window and weekly limits, with
+burn-rate "time-to-limit", a live 5-hour usage graph,
 estimated spend, and green→amber→red severity colors. Pixel "Clawd" mascot +
 Claude serif type.
 
@@ -30,8 +30,11 @@ credentials — click **Always Allow**.
 ## How it works
 
 - **Local activity**: parses `~/.claude/projects/**.jsonl` for token usage.
-- **Live plan limits**: reads the OAuth token Claude Code stored in your macOS
-  Keychain and calls `api.anthropic.com/api/oauth/usage`.
+- **Live plan limits** (two paths, picked automatically):
+  - **Claude Code** (Pro/Max) — reads the token Claude Code stored in your Keychain. Zero sign-in.
+  - **Sign in to Claude** (any tier, incl. **Free**) — a one-time in-app claude.ai
+    login captures your `sessionKey` (kept in the Keychain) and calls
+    `claude.ai/api/organizations/{org}/usage`, the same endpoint the website uses.
 
 > This `/api/oauth/usage` endpoint is **undocumented** and may change with Claude
 > Code updates. It's polled gently (90s) to avoid rate limits. Nothing leaves your

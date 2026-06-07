@@ -351,6 +351,25 @@ func parseResetDate(_ s: String) -> Date? {
     return nil
 }
 
+// Shared parser for the usage JSON — the OAuth (api.anthropic.com) and the
+// claude.ai cookie endpoints return the same shape.
+func parsePlanUsage(_ j: [String: Any]) -> PlanUsage {
+    func blk(_ key: String) -> (Double, Date?) {
+        guard let b = j[key] as? [String: Any] else { return (0, nil) }
+        let u: Double = (b["utilization"] as? Double) ?? Double(b["utilization"] as? Int ?? 0)
+        let d = (b["resets_at"] as? String).flatMap(parseResetDate)
+        return (u, d)
+    }
+    let (f, fr) = blk("five_hour"); let (w, wr) = blk("seven_day")
+    var pu = PlanUsage(fiveHourPct: f, fiveHourReset: fr, weekPct: w, weekReset: wr)
+    if let e = j["extra_usage"] as? [String: Any] {
+        pu.extraEnabled = e["is_enabled"] as? Bool ?? false
+        pu.extraUsed = (e["used_credits"] as? Double) ?? Double(e["used_credits"] as? Int ?? 0)
+        pu.extraLimit = (e["monthly_limit"] as? Double) ?? Double(e["monthly_limit"] as? Int ?? 0)
+    }
+    return pu
+}
+
 func fetchPlanUsage(_ token: String, _ completion: @escaping (PlanUsage?) -> Void) {
     guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else {
         completion(nil); return
@@ -365,20 +384,7 @@ func fetchPlanUsage(_ token: String, _ completion: @escaping (PlanUsage?) -> Voi
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             completion(nil); return
         }
-        func blk(_ key: String) -> (Double, Date?) {
-            guard let b = j[key] as? [String: Any] else { return (0, nil) }
-            let u: Double = (b["utilization"] as? Double) ?? Double(b["utilization"] as? Int ?? 0)
-            let d = (b["resets_at"] as? String).flatMap(parseResetDate)
-            return (u, d)
-        }
-        let (f, fr) = blk("five_hour"); let (w, wr) = blk("seven_day")
-        var pu = PlanUsage(fiveHourPct: f, fiveHourReset: fr, weekPct: w, weekReset: wr)
-        if let e = j["extra_usage"] as? [String: Any] {
-            pu.extraEnabled = e["is_enabled"] as? Bool ?? false
-            pu.extraUsed = (e["used_credits"] as? Double) ?? Double(e["used_credits"] as? Int ?? 0)
-            pu.extraLimit = (e["monthly_limit"] as? Double) ?? Double(e["monthly_limit"] as? Int ?? 0)
-        }
-        completion(pu)
+        completion(parsePlanUsage(j))
     }.resume()
 }
 
@@ -389,7 +395,9 @@ final class UsageStore: ObservableObject {
     @Published var plan: PlanUsage?
     @Published var burn: BurnInfo?
     @Published var samples: [(t: Date, util: Double)] = []   // 5h-window utilization curve
-    @Published var tokenMissing = false                       // no Claude Code login (e.g. free plan)
+    @Published var tokenMissing = false                       // no Claude Code login
+    @Published var needsSignIn = false                        // no token AND no claude.ai cookie
+    @Published var signedInViaCookie = false                  // using claude.ai sign-in (any tier)
     @Published var loading = true
     var onUpdate: (() -> Void)?
     private let q = DispatchQueue(label: "claudeusage.load", qos: .userInitiated)
@@ -451,20 +459,44 @@ final class UsageStore: ObservableObject {
         if now.timeIntervalSince(lastPlanFetch) < 10 { return }   // throttle bursts → avoid 429
         lastPlanFetch = now
         planQ.async {
-            guard let token = readClaudeOAuthToken() else {
-                // No Claude Code login on this Mac (e.g. free plan / not installed).
+            if let token = readClaudeOAuthToken() {
+                // Fast path: Claude Code login (Pro/Max).
                 DispatchQueue.main.async {
-                    self.tokenMissing = true
+                    self.tokenMissing = false; self.needsSignIn = false; self.signedInViaCookie = false
+                }
+                fetchPlanUsage(token) { p in DispatchQueue.main.async { self.applyPlan(p) } }
+            } else if let sk = readSessionKey() {
+                // Universal path: claude.ai sign-in (Free / Pro / Team / Max).
+                DispatchQueue.main.async {
+                    self.tokenMissing = true; self.needsSignIn = false; self.signedInViaCookie = true
+                }
+                fetchPlanUsageViaCookie(sk) { p in DispatchQueue.main.async { self.applyPlan(p) } }
+            } else {
+                // Nothing to read — prompt the user to sign in.
+                DispatchQueue.main.async {
+                    self.tokenMissing = true; self.needsSignIn = true; self.signedInViaCookie = false
                     if self.plan == nil { self.burn = nil }
                     self.onUpdate?()
                 }
-                return
-            }
-            DispatchQueue.main.async { self.tokenMissing = false }
-            fetchPlanUsage(token) { p in
-                DispatchQueue.main.async { self.applyPlan(p) }
             }
         }
+    }
+
+    func signIn() {
+        ClaudeLogin.shared.present { [weak self] key in
+            guard let self = self, let key = key else { return }
+            saveSessionKey(key)
+            self.needsSignIn = false
+            self.lastPlanFetch = .distantPast   // bypass throttle → refresh now
+            self.loadPlan()
+        }
+    }
+
+    func signOut() {
+        clearSessionKey()
+        plan = nil; burn = nil
+        signedInViaCookie = false; needsSignIn = true; tokenMissing = true
+        onUpdate?()
     }
 
     private func planFileURL() -> URL {
@@ -767,8 +799,8 @@ struct RootView: View {
         let s = store.summary
         VStack(spacing: 0) {
             header(t)
-            if store.tokenMissing && store.plan == nil && s.recordCount == 0 {
-                freeState(t)
+            if store.needsSignIn && store.plan == nil {
+                signInState(t)
             } else if store.loading && s.recordCount == 0 && store.plan == nil {
                 centered("Baking…", t, baking: true)
             } else if s.recordCount == 0 && store.plan == nil {
@@ -969,35 +1001,29 @@ struct RootView: View {
         .frame(maxWidth: .infinity).padding(.vertical, 40)
     }
 
-    // Shown when there's no Claude Code login on this Mac (e.g. a free-plan user):
-    // honest, friendly state instead of a blank panel.
-    func freeState(_ t: Theme) -> some View {
+    // Sign-in prompt — works for any tier (Free / Pro / Team / Max).
+    func signInState(_ t: Theme) -> some View {
         VStack(spacing: 12) {
             AnimatedMascot(name: "expression_sleep", cell: 5, fill: t.accent2, eye: t.bg)
-            Text("No Claude Code sign-in found")
+            Text("Sign in to see your usage")
                 .font(.claude(17, .semibold)).foregroundColor(t.text)
-            Text("Live usage is read from Claude Code, which needs a Pro or Max plan. Anthropic doesn't expose free-plan usage to outside apps.")
+            Text("Connect your Claude account — Free, Pro, Team, or Max — to track your 5-hour and weekly limits.")
                 .font(.claude(12)).foregroundColor(t.subtext)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 14)
-            Button {
-                if let u = URL(string: "https://claude.com/product/claude-code") {
-                    NSWorkspace.shared.open(u)
-                }
-            } label: {
-                Text("Get Claude Code")
-                    .font(.claude(13, .semibold)).foregroundColor(t.accent)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Capsule().fill(t.accentSoft))
-                    .overlay(Capsule().stroke(t.border, lineWidth: 1))
+            Button { store.signIn() } label: {
+                Text("Sign in to Claude")
+                    .font(.claude(13, .semibold)).foregroundColor(t.bg)
+                    .padding(.horizontal, 18).padding(.vertical, 9)
+                    .background(Capsule().fill(t.accent2))
             }
             .buttonStyle(.plain)
             .onHover { inside in
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 32).padding(.horizontal, 18)
+        .frame(maxWidth: .infinity).padding(.vertical, 30).padding(.horizontal, 18)
     }
 
     func footer(_ t: Theme) -> some View {
@@ -1013,6 +1039,11 @@ struct RootView: View {
                 Text("Updated \(time)").font(.claude(11)).foregroundColor(t.subtext)
             }
             Spacer()
+            if store.signedInViaCookie {
+                Button { store.signOut() } label: {
+                    Text("Sign out").font(.claude(12, .medium))
+                }.buttonStyle(.plain).foregroundColor(t.subtext)
+            }
             alertMenu(t)
             Button { NSApplication.shared.terminate(nil) } label: {
                 Text("Quit").font(.claude(12, .medium))

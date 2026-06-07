@@ -35,7 +35,8 @@ swiftc -O \
   -o "$APP/Contents/MacOS/ClaudeUsage" \
   "$DIR/ClaudeUsageBar.swift" \
   "$DIR/ClaudeAnims.swift" \
-  -framework SwiftUI -framework AppKit
+  "$DIR/ClaudeWeb.swift" \
+  -framework SwiftUI -framework AppKit -framework WebKit -framework Security
 
 pkill -f "ClaudeUsage.app/Contents/MacOS/ClaudeUsage" 2>/dev/null || true
 sleep 0.3
