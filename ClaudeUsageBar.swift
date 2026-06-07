@@ -389,6 +389,7 @@ final class UsageStore: ObservableObject {
     @Published var plan: PlanUsage?
     @Published var burn: BurnInfo?
     @Published var samples: [(t: Date, util: Double)] = []   // 5h-window utilization curve
+    @Published var tokenMissing = false                       // no Claude Code login (e.g. free plan)
     @Published var loading = true
     var onUpdate: (() -> Void)?
     private let q = DispatchQueue(label: "claudeusage.load", qos: .userInitiated)
@@ -451,8 +452,15 @@ final class UsageStore: ObservableObject {
         lastPlanFetch = now
         planQ.async {
             guard let token = readClaudeOAuthToken() else {
-                DispatchQueue.main.async { self.plan = nil; self.burn = nil; self.onUpdate?() }; return
+                // No Claude Code login on this Mac (e.g. free plan / not installed).
+                DispatchQueue.main.async {
+                    self.tokenMissing = true
+                    if self.plan == nil { self.burn = nil }
+                    self.onUpdate?()
+                }
+                return
             }
+            DispatchQueue.main.async { self.tokenMissing = false }
             fetchPlanUsage(token) { p in
                 DispatchQueue.main.async { self.applyPlan(p) }
             }
@@ -759,9 +767,11 @@ struct RootView: View {
         let s = store.summary
         VStack(spacing: 0) {
             header(t)
-            if store.loading && s.recordCount == 0 {
+            if store.tokenMissing && store.plan == nil && s.recordCount == 0 {
+                freeState(t)
+            } else if store.loading && s.recordCount == 0 && store.plan == nil {
                 centered("Baking…", t, baking: true)
-            } else if s.recordCount == 0 {
+            } else if s.recordCount == 0 && store.plan == nil {
                 centered("No Claude Code usage found yet.", t)
             } else {
                 ScrollView { content(t, s).padding(16) }.frame(maxHeight: 520)
@@ -957,6 +967,37 @@ struct RootView: View {
             }
         }
         .frame(maxWidth: .infinity).padding(.vertical, 40)
+    }
+
+    // Shown when there's no Claude Code login on this Mac (e.g. a free-plan user):
+    // honest, friendly state instead of a blank panel.
+    func freeState(_ t: Theme) -> some View {
+        VStack(spacing: 12) {
+            AnimatedMascot(name: "expression_sleep", cell: 5, fill: t.accent2, eye: t.bg)
+            Text("No Claude Code sign-in found")
+                .font(.claude(17, .semibold)).foregroundColor(t.text)
+            Text("Live usage is read from Claude Code, which needs a Pro or Max plan. Anthropic doesn't expose free-plan usage to outside apps.")
+                .font(.claude(12)).foregroundColor(t.subtext)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+            Button {
+                if let u = URL(string: "https://claude.com/product/claude-code") {
+                    NSWorkspace.shared.open(u)
+                }
+            } label: {
+                Text("Get Claude Code")
+                    .font(.claude(13, .semibold)).foregroundColor(t.accent)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Capsule().fill(t.accentSoft))
+                    .overlay(Capsule().stroke(t.border, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 32).padding(.horizontal, 18)
     }
 
     func footer(_ t: Theme) -> some View {
