@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DIR="/Users/srivibhavp/ClaudeUsage"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 APP="$DIR/ClaudeUsage.app"
 ARCH="$(uname -m)"
 
@@ -16,7 +16,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key><string>ClaudeUsage</string>
   <key>CFBundleDisplayName</key><string>Claude Usage</string>
-  <key>CFBundleIdentifier</key><string>com.srivibhavp.claudeusage</string>
+  <key>CFBundleIdentifier</key><string>com.clawd.claudeusage</string>
   <key>CFBundleExecutable</key><string>ClaudeUsage</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
