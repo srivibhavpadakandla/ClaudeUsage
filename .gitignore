@@ -1,0 +1,10 @@
+# Build artifacts
+ClaudeUsage.app/
+*.app/
+build/
+.DS_Store
+
+# Personal usage data (not secrets, but yours)
+limits.json
+history.json
+plan.json
