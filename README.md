@@ -1,4 +1,4 @@
-# ClaudeUsage
+<img width="388" height="575" alt="image" src="https://github.com/user-attachments/assets/f785348e-1f60-4024-9ea2-dd90ed74f6c4" /># ClaudeUsage
 
 A Claude-themed macOS menu-bar app that shows your **real Claude Max plan usage** —
 the live 5-hour window and weekly limits (from the same endpoint Claude Code's
@@ -37,4 +37,8 @@ credentials — click **Always Allow**.
 > Code updates. It's polled gently (90s) to avoid rate limits. Nothing leaves your
 > machine except that authenticated request to Anthropic's own servers.
 
-Your personal data (`limits.json`, `history.json`, `plan.json`) is gitignored.
+Your personal data (`limits.json`, `history.json`, `plan.json`) is gitignored.  
+
+
+<img width="388" height="575" alt="image" src="https://github.com/user-attachments/assets/1f9260f8-ef9c-4b79-a976-772fbfb46a45" />
+
